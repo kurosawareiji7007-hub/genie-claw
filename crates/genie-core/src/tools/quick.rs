@@ -3170,6 +3170,13 @@ fn asks_for_news(text: &str) -> bool {
 }
 
 fn web_search_request(text: &str) -> Option<(String, bool)> {
+    // A leading "please" is politeness, not part of the request. The look-up /
+    // search prefixes below are start-anchored, so "please look up …" /
+    // "please search the web for …" fell through to the LLM even though the
+    // trailing-"please" forms already route. Mirror scene-routine / shopping /
+    // play_media / news / time.
+    let text = text.strip_prefix("please ").unwrap_or(text);
+
     if text.starts_with("search memory ") || text.starts_with("search memories ") {
         return None;
     }
@@ -7486,6 +7493,27 @@ mod tests {
         let call = route("search the web for matter support please").unwrap();
         assert_eq!(call.name, "web_search");
         assert_eq!(call.arguments["query"], "matter support");
+    }
+
+    #[test]
+    fn web_search_accepts_a_leading_please() {
+        // A leading "please" defeated the start-anchored look-up / search
+        // prefixes even though trailing-"please" forms already route.
+        let call = route("Please look up the best mesh router").unwrap();
+        assert_eq!(call.name, "web_search");
+        assert_eq!(call.arguments["query"], "the best mesh router");
+
+        let call = route("Please search the web for matter support").unwrap();
+        assert_eq!(call.name, "web_search");
+        assert_eq!(call.arguments["query"], "matter support");
+
+        let call = route("Please look up the best mesh router please").unwrap();
+        assert_eq!(call.name, "web_search");
+        assert_eq!(call.arguments["query"], "the best mesh router");
+
+        // Unrelated polite requests and reminder forms must not invent a search.
+        assert!(route("Please help me").is_none());
+        assert!(route("Please remind me to check the tesla stock price in 20 minutes").is_none());
     }
 
     #[test]
