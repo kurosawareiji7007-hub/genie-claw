@@ -7,7 +7,7 @@
 - **Weather (rain)**: strip a leading `please` before the start-anchored rain
   branch, so polite forms (`please will it rain`, `please is it raining in
   Seattle`) route the same as their non-`please` counterparts — trailing
-  `please` was already stripped from the location (#NNN).
+  `please` was already stripped from the location (#934).
 - **Scene / routine**: strip a leading `please` before the exact-match set and
   the `activate`/`start`/`run` prefix loop, so polite forms
   (`please activate the movie scene`, `please goodnight`, `please I am home`)
