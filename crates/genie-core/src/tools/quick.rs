@@ -3087,6 +3087,14 @@ fn is_time_expression(location: &str) -> bool {
 }
 
 fn weather_request(text: &str) -> Option<(String, bool)> {
+    // A leading "please" is politeness, not part of the request. The rain branch
+    // is start-anchored (`is it rain` / `will it rain`), so "please will it rain"
+    // fell through to the LLM even though trailing-"please" rain forms already
+    // route. General "weather"/"forecast" queries still match via contains, which
+    // is why the asymmetry only shows on the rain path. Mirror other quick-router
+    // leading-please strips.
+    let text = text.strip_prefix("please ").unwrap_or(text);
+
     if text.starts_with("is it rain") || text.starts_with("will it rain") {
         if text.contains("school pickup") {
             return Some(("home".into(), false));
@@ -7365,6 +7373,28 @@ mod tests {
         let call = route("will it rain in Seattle please").unwrap();
         assert_eq!(call.name, "get_weather");
         assert_eq!(call.arguments["location"], "seattle");
+    }
+
+    #[test]
+    fn rain_query_accepts_a_leading_please() {
+        // Leading please defeated the start-anchored rain branch even though
+        // trailing please already works on named cities.
+        let call = route("Please will it rain").unwrap();
+        assert_eq!(call.name, "get_weather");
+        assert_eq!(call.arguments["location"], "home");
+
+        let call = route("Please is it raining").unwrap();
+        assert_eq!(call.name, "get_weather");
+        assert_eq!(call.arguments["location"], "home");
+
+        let call = route("Please will it rain in Seattle").unwrap();
+        assert_eq!(call.name, "get_weather");
+        assert_eq!(call.arguments["location"], "seattle");
+
+        // Time expressions after "in" keep the default local (home) forecast.
+        let call = route("Please will it rain in the morning").unwrap();
+        assert_eq!(call.name, "get_weather");
+        assert_eq!(call.arguments["location"], "home");
     }
 
     #[test]
