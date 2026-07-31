@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Reliability
+
+- **Governor control socket**: idle-read deadline on each control line so a
+  connect-and-stall peer cannot park `fill_buf` forever and leak a task/fd per
+  connection — line size was already capped (#937).
+
 ### Quick-router tool-call accuracy
 
 - **Scene / routine**: strip a leading `please` before the exact-match set and

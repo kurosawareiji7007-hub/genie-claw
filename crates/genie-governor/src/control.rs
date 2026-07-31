@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 #[allow(unused_imports)]
@@ -11,6 +13,10 @@ const SOCKET_PATH: &str = "/run/geniepod/governor.sock";
 /// Owner/group read-write only — genie-core and genie-ctl run as root on device.
 const SOCKET_MODE: u32 = 0o660;
 const RUN_DIR_MODE: u32 = 0o750;
+/// Idle-read deadline for one control-socket line. Size is already capped
+/// (`MAX_CONTROL_LINE_BYTES`); without a time bound a connect-and-stall peer
+/// parks `fill_buf` forever and leaks the per-connection task + fd.
+const CONTROL_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Commands that external processes (genie-core, CLI) can send to the governor.
 #[derive(Debug, Serialize, Deserialize)]
@@ -138,14 +144,23 @@ async fn handle_connection(stream: UnixStream, tx: mpsc::Sender<(Command, Respon
     let mut reader = BufReader::new(reader);
 
     loop {
-        let line = match read_control_line(&mut reader).await {
-            Ok(Some(line)) => line,
-            Ok(None) => break,
-            Err(e) => {
+        let line = match tokio::time::timeout(CONTROL_READ_TIMEOUT, read_control_line(&mut reader))
+            .await
+        {
+            Ok(Ok(Some(line))) => line,
+            Ok(Ok(None)) => break,
+            Ok(Err(e)) => {
                 let err = serde_json::json!({"error": e});
                 let mut msg = err.to_string();
                 msg.push('\n');
                 let _ = writer.write_all(msg.as_bytes()).await;
+                break;
+            }
+            Err(_elapsed) => {
+                tracing::warn!(
+                    timeout = ?CONTROL_READ_TIMEOUT,
+                    "control socket idle read timed out; closing connection"
+                );
                 break;
             }
         };
@@ -222,6 +237,35 @@ mod tests {
                 "control command exceeds {MAX_CONTROL_LINE_BYTES} bytes"
             )),
             "expected cap error, got: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn control_read_timeout_drops_a_stalled_peer() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        // Accept but never write a newline — previously `fill_buf` hung forever.
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        });
+
+        let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let short = Duration::from_millis(200);
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(short, read_control_line(&mut reader)).await;
+        let elapsed = started.elapsed();
+        server.abort();
+
+        assert!(
+            result.is_err(),
+            "stalled peer must hit the idle-read deadline, not complete a line"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "must fail on the timeout, not wait for the peer: took {elapsed:?}"
         );
     }
 }
