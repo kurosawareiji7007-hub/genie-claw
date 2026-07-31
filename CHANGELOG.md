@@ -7,7 +7,7 @@
 - **Web search**: strip a leading `please` before the look-up / search prefix
   loop, so polite forms (`please look up …`, `please search the web for …`)
   route the same as their non-`please` counterparts — trailing `please` was
-  already stripped from the query (#NNN).
+  already stripped from the query (#932).
 - **Scene / routine**: strip a leading `please` before the exact-match set and
   the `activate`/`start`/`run` prefix loop, so polite forms
   (`please activate the movie scene`, `please goodnight`, `please I am home`)
