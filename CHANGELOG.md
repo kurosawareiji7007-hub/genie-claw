@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Reliability
+
+- **OpenAI-compatible streaming**: bound the wait for response headers on the
+  reqwest optional-API path so a connect-and-stall backend cannot park
+  `send()` forever and wedge the chat turn gate — chunk reads were already
+  idle-timed (#938).
+
 ### Quick-router tool-call accuracy
 
 - **Scene / routine**: strip a leading `please` before the exact-match set and

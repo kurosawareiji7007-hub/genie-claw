@@ -140,8 +140,10 @@ impl OpenAiCompatibleBackend {
         timeouts: LlmTimeouts,
     ) -> Result<Self> {
         let base_url = parse_openai_compatible_base_url(url)?;
-        // No client-wide request timeout: non-stream calls set one per request,
-        // and streaming relies on per-chunk idle timeouts instead.
+        // No client-wide request timeout: non-stream calls set one per request.
+        // Streaming must not use a whole-body reqwest timeout (that would kill
+        // long SSE), but waiting for *response headers* still needs a deadline —
+        // otherwise a connect-and-stall peer parks `send()` forever.
         let http = reqwest::Client::builder()
             .connect_timeout(timeouts.connect)
             .pool_max_idle_per_host(0)
@@ -230,7 +232,21 @@ impl OpenAiCompatibleBackend {
             request = request.timeout(self.timeouts.request);
         }
 
-        let response = request.send().await.map_err(|err| {
+        let response = if stream {
+            // Bound only the wait for headers; chunk reads use timeouts.read below.
+            match tokio::time::timeout(self.timeouts.read, request.send()).await {
+                Ok(result) => result,
+                Err(_) => {
+                    anyhow::bail!(
+                        "openai-compatible stream timed out waiting for response headers after {}s",
+                        self.timeouts.read.as_secs()
+                    )
+                }
+            }
+        } else {
+            request.send().await
+        }
+        .map_err(|err| {
             // reqwest errors can embed URLs; never include Authorization.
             anyhow::anyhow!(
                 "openai-compatible request failed: {}",
@@ -542,5 +558,53 @@ mod tests {
         let err = backend.resolve_bearer_token().unwrap_err().to_string();
         assert!(err.contains("is not set"), "{err}");
         assert!(!err.contains("Bearer"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn streaming_send_times_out_waiting_for_headers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Accept TCP but never write HTTP response headers.
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        });
+
+        let backend = OpenAiCompatibleBackend::from_url_with_bearer_token_and_timeouts(
+            &format!("http://{addr}/v1"),
+            "test-token",
+            LlmTimeouts {
+                connect: Duration::from_secs(2),
+                read: Duration::from_millis(200),
+                request: Duration::from_secs(2),
+            },
+        )
+        .unwrap();
+
+        let started = std::time::Instant::now();
+        let err = backend
+            .post_chat(
+                true,
+                &[Message {
+                    role: "user".into(),
+                    content: "hi".into(),
+                }],
+                None,
+                None,
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        let elapsed = started.elapsed();
+        server.abort();
+
+        assert!(
+            err.contains("timed out waiting for response headers"),
+            "expected headers-wait timeout, got: {err}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "must fail on the read deadline, not hang: took {elapsed:?}"
+        );
     }
 }
