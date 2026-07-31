@@ -302,6 +302,12 @@ fn asks_memory_status(text: &str) -> bool {
 }
 
 fn memory_recall_query(text: &str) -> Option<String> {
+    // A leading "please" is politeness, not part of the request. The recall
+    // prefixes below are start-anchored, so "please search memory for …" /
+    // "please do you remember …" fell through to the LLM even though trailing
+    // "please" forms already route. Mirror web_search / shopping / scene.
+    let text = text.strip_prefix("please ").unwrap_or(text);
+
     // "who am i" has to *end* the utterance. As a bare `contains` needle it also
     // swallowed continuations that ask something else entirely — the rhetorical
     // "who am i kidding" and "who am i talking to" both answered with the
@@ -429,6 +435,11 @@ fn note_recall_query_from_original(original: &str) -> Option<String> {
 /// device, timer, and list deletions ("delete the alarm") keep their own routes,
 /// and a bare "forget it"/"forget that" abstains for the LLM.
 fn memory_forget_query(text: &str) -> Option<String> {
+    // A leading "please" is politeness, not part of the request. The forget
+    // prefixes below are start-anchored, so "please forget my …" fell through
+    // even though trailing-"please" forms already route.
+    let text = text.strip_prefix("please ").unwrap_or(text);
+
     // Prefixes are longest-first; the first match wins so that, e.g.,
     // "forget about it" resolves on "forget about " (a bare-pronoun remainder ->
     // abstain) rather than falling through to "forget " and yielding "about it".
@@ -4068,6 +4079,12 @@ mod tests {
                 "old locker combination",
             ),
             ("forget the wifi password please", "wifi password"),
+            // Leading please — same politeness, start-anchored prefixes.
+            (
+                "Please forget my old locker combination",
+                "old locker combination",
+            ),
+            ("Please forget the wifi password please", "wifi password"),
         ] {
             let call = route(utterance).unwrap_or_else(|| panic!("{utterance} should route"));
             assert_eq!(call.name, "memory_forget", "{utterance}");
@@ -4100,6 +4117,17 @@ mod tests {
         let call = route("search memory for jared").unwrap();
         assert_eq!(call.name, "memory_recall");
         assert_eq!(call.arguments["query"], "jared");
+
+        // Leading please defeated the start-anchored recall prefixes.
+        let call = route("Please search memory for jared").unwrap();
+        assert_eq!(call.name, "memory_recall");
+        assert_eq!(call.arguments["query"], "jared");
+
+        let call = route("Please search memory for jared please").unwrap();
+        assert_eq!(call.name, "memory_recall");
+        assert_eq!(call.arguments["query"], "jared");
+
+        assert!(route("Please help me").is_none());
     }
 
     #[test]

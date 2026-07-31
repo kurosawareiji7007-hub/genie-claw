@@ -4,6 +4,10 @@
 
 ### Quick-router tool-call accuracy
 
+- **Memory recall / forget**: strip a leading `please` before the start-anchored
+  recall and forget prefix loops, so polite forms (`please search memory for …`,
+  `please forget my …`) route the same as their non-`please` counterparts —
+  trailing `please` was already stripped from the query.
 - **Scene / routine**: strip a leading `please` before the exact-match set and
   the `activate`/`start`/`run` prefix loop, so polite forms
   (`please activate the movie scene`, `please goodnight`, `please I am home`)
